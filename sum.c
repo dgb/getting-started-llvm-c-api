@@ -19,17 +19,6 @@
 int main(int argc, char const *argv[]) {
     LLVMModuleRef mod = LLVMModuleCreateWithName("my_module");
 
-    LLVMTypeRef param_types[] = { LLVMInt32Type(), LLVMInt32Type() };
-    LLVMTypeRef ret_type = LLVMFunctionType(LLVMInt32Type(), param_types, 2, 0);
-    LLVMValueRef sum = LLVMAddFunction(mod, "sum", ret_type);
-
-    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(sum, "entry");
-
-    LLVMBuilderRef builder = LLVMCreateBuilder();
-    LLVMPositionBuilderAtEnd(builder, entry);
-    LLVMValueRef tmp = LLVMBuildAdd(builder, LLVMGetParam(sum, 0), LLVMGetParam(sum, 1), "tmp");
-    LLVMBuildRet(builder, tmp);
-
     char *error = NULL;
     LLVMVerifyModule(mod, LLVMAbortProcessAction, &error);
     LLVMDisposeMessage(error);
@@ -39,7 +28,7 @@ int main(int argc, char const *argv[]) {
     LLVMLinkInMCJIT();
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmPrinter();
-    LLVMInitializeNativeAsmParser();
+
     if (LLVMCreateExecutionEngineForModule(&engine, mod, &error) != 0) {
         fprintf(stderr, "failed to create execution engine\n");
         abort();
@@ -57,11 +46,38 @@ int main(int argc, char const *argv[]) {
     long long x = strtoll(argv[1], NULL, 10);
     long long y = strtoll(argv[2], NULL, 10);
 
-    LLVMGenericValueRef args[] = {
-        LLVMCreateGenericValueOfInt(LLVMInt32Type(), x, 0),
-        LLVMCreateGenericValueOfInt(LLVMInt32Type(), y, 0)
+    // Builder
+    LLVMBuilderRef builder = LLVMCreateBuilder();
+
+    // Sum function int32, int32 -> int32
+    LLVMTypeRef param_types[] = { LLVMInt32Type(), LLVMInt32Type() };
+    LLVMTypeRef ret_type = LLVMFunctionType(LLVMInt32Type(), param_types, 2, 0);
+    LLVMValueRef sum = LLVMAddFunction(mod, "sum", ret_type);
+
+    LLVMBasicBlockRef sum_entry = LLVMAppendBasicBlock(sum, "entry");
+
+    LLVMPositionBuilderAtEnd(builder, sum_entry);
+
+    LLVMValueRef tmp = LLVMBuildAdd(builder, LLVMGetParam(sum, 0), LLVMGetParam(sum, 1), "tmp");
+    LLVMBuildRet(builder, tmp);
+
+    // Wrapper function void -> int32
+    LLVMTypeRef wrap_type = LLVMFunctionType(LLVMInt32Type(), NULL, 0, 0);
+    LLVMValueRef wrap = LLVMAddFunction(mod, "wrap", wrap_type);
+
+    LLVMBasicBlockRef wrap_entry = LLVMAppendBasicBlock(wrap, "entry");
+    LLVMPositionBuilderAtEnd(builder, wrap_entry);
+
+    LLVMValueRef args[] = {
+        LLVMConstInt(LLVMInt32Type(), x, 0),
+        LLVMConstInt(LLVMInt32Type(), y, 0)
     };
-    LLVMGenericValueRef res = LLVMRunFunction(engine, sum, 2, args);
+
+    LLVMValueRef wrap_tmp = LLVMBuildCall(builder, sum, args, 2, "wrap_tmp");
+
+    LLVMBuildRet(builder, wrap_tmp);
+
+    LLVMGenericValueRef res = LLVMRunFunction(engine, wrap, 0, NULL);
     printf("%d\n", (int)LLVMGenericValueToInt(res, 0));
 
     // Write out bitcode to file
